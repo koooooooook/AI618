@@ -1,4 +1,4 @@
-# TweedieMix
+# TweedieMix (ICLR 2025)
 
 Official source codes for "[TweedieMix: Improving Multi-Concept Fusion for Diffusion-based Image/Video Generation](https://arxiv.org/abs/2410.05591)"
 

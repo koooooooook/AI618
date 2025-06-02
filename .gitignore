@@ -1,0 +1,8 @@
+__MACOSX/
+*.zip
+*.whl
+*.pyc
+__pycache__/
+checkpoint_custom/
+benchmark_dataset/
+test_out/

@@ -16,7 +16,7 @@ PROMPT_ORIG="photo of a cat and a dog running, mountain background"
 for SEED in {3800..3829}
 do
     echo "Processing seed: $SEED"
-    RESULT_PATH="./test_out/${SEED}"
+    export RESULT_PATH="./test_out/${SEED}_resampling2"
 
     ## concept order must be the same as the prompt
     CONCEPTS="cat+dog+mountain"
@@ -33,10 +33,10 @@ do
 
     PERSONAL_CHECKPOINT="./checkpoint_custom/cat1.bin+./checkpoint_custom/dog1.bin+./checkpoint_custom/mountain1.bin"
 
-    python fusion_generation/fusion_sampling.py \
+    python fusion_generation/fusion_sampling_resampling.py \
     --guidance_scale 0.8 --n_timesteps 50 --prompt "$PROMPT" --personal_checkpoint $PERSONAL_CHECKPOINT \
     --output_path $RESULT_PATH --output_path_all $RESULT_PATH --sd_version "xl" --concepts "$CONCEPTS" --modifier_token $MODIFIER --resolution_h 1024 --resolution_w 1024 \
-    --prompt_orig "$PROMPT_ORIG" --seed $SEED --t_cond 0.2 --seg_concepts="$SEG_CONCEPTS" --negative_prompt '' --seg_gpu $SEG_GPU
+    --prompt_orig "$PROMPT_ORIG" --seed $SEED --t_cond 0.2 --seg_concepts="$SEG_CONCEPTS" --negative_prompt '' --seg_gpu $SEG_GPU --use_slerp_noise
     
 
     ## -----------when using lora weights-----------

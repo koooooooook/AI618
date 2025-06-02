@@ -1,12 +1,12 @@
 export MODEL_NAME="stabilityai/stable-diffusion-xl-base-1.0"
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 export VAE_PATH=None
 
 accelerate launch --num_processes 1 concept_training/diffusers_training_xl_new.py \
           --pretrained_model_name_or_path=$MODEL_NAME  \
-          --instance_data_dir=./benchmark_dataset/pet_dog1 \
-          --output_dir=./checkpoint_custom/pet_dog1 \
-          --instance_prompt="photo of a <dog1> dog"  \
+          --instance_data_dir=./benchmark_dataset/td_dogcatgarden \
+          --output_dir=./checkpoint_custom/td_dogcatgarden \
+          --instance_prompt="photo of <dogcatgarden1> dog and a cat"  \
           --resolution=512 \
           --train_batch_size=1  \
           --learning_rate=1e-5  \
@@ -15,10 +15,11 @@ accelerate launch --num_processes 1 concept_training/diffusers_training_xl_new.p
           --num_class_images=100 \
           --save_steps=200 \
           --scale_lr --hflip  \
-          --modifier_token "<dog1>" \
+          --modifier_token "<dogcatgarden1>" \
           --gradient_checkpointing \
           --use_8bit_adam \
           --gradient_accumulation_steps=4 \
+
 
 # using lora 
 # accelerate launch --num_processes 1 concept_training/diffusers_training_xl_lora.py \

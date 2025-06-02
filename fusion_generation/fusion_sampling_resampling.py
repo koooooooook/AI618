@@ -318,6 +318,49 @@ class Tweediemix(nn.Module):
         eps = (torch.sin((1 - alpha) * theta) * eps1_flat + torch.sin(alpha * theta) * eps2_flat) / sin_theta
         return eps.view_as(eps1)
 
+    def slerp_multiple_noises(self, noises, weights=None):
+        """
+        Spherical linear interpolation across multiple noise tensors.
+        
+        Args:
+            noises: list of [B, ...] torch.Tensors, each representing a noise tensor
+            weights: optional list of floats (same length as noises), should sum to 1
+
+        Returns:
+            torch.Tensor: interpolated noise tensor of shape [B, ...]
+        """
+        assert len(noises) >= 2, "At least two noise tensors are required"
+        assert all(n.shape == noises[0].shape for n in noises), "All noise tensors must have the same shape"
+
+        if weights is None:
+            weights = [1.0 / len(noises)] * len(noises)
+            weights = torch.tensor(weights, device=noises[0].device)
+        else:
+            weights = torch.tensor(weights, device=noises[0].device)
+            weights = weights / weights.sum()
+
+        # Flatten all noises for interpolation
+        flat_noises = [n.view(n.shape[0], -1) for n in noises]
+        interpolated = flat_noises[0]  # start from the first
+
+        for i in range(1, len(flat_noises)):
+            n_i = flat_noises[i]
+            alpha = weights[i] / (weights[:i + 1]).sum()  # normalize step-wise
+
+            dot = (interpolated * n_i).sum(dim=1, keepdim=True)
+            dot = dot / (interpolated.norm(dim=1, keepdim=True) * n_i.norm(dim=1, keepdim=True)).clamp(min=1e-8)
+            dot = dot.clamp(-1.0, 1.0)
+
+            theta = torch.acos(dot)
+            sin_theta = torch.sin(theta).clamp(min=1e-6)
+
+            interpolated = (
+                torch.sin((1 - alpha) * theta) * interpolated +
+                torch.sin(alpha * theta) * n_i
+            ) / sin_theta
+
+        return interpolated.view_as(noises[0])
+
     @torch.no_grad()
     def denoise_step(self, x, t):
 
@@ -497,12 +540,19 @@ class Tweediemix(nn.Module):
     def run_fusion(self):
         t_cond = int(self.config.n_timesteps * self.config.t_cond)
         self.init_fusion(t_cond=t_cond)
-        if self.config.use_slerp_noise:
+        if self.config.use_slerp_noise == 1:
+            normal = torch.randn(1,4,self.config.resolution_h//8,self.config.resolution_w//8).to(self.unet.device)  * self.scheduler.init_noise_sigma
+        elif self.config.use_slerp_noise == 2:
             eps1 = torch.randn(1, 4, self.config.resolution_h//8, self.config.resolution_w//8).to(self.unet.device)  * self.scheduler.init_noise_sigma
             eps2 = torch.randn_like(eps1)
-            normal = self.slerp_noise(eps1, eps2, alpha=0.5)
-        else:
-            normal = torch.randn(1,4,self.config.resolution_h//8,self.config.resolution_w//8).to(self.unet.device)  * self.scheduler.init_noise_sigma
+            noises = [eps1, eps2]
+            normal = self.slerp_multiple_noises(noises)
+        elif self.config.use_slerp_noise == 3:
+            eps1 = torch.randn(1, 4, self.config.resolution_h//8, self.config.resolution_w//8).to(self.unet.device)  * self.scheduler.init_noise_sigma
+            eps2 = torch.randn_like(eps1)
+            eps3 = torch.randn_like(eps1)
+            noises = [eps1, eps2, eps3]
+            normal = self.slerp_multiple_noises(noises)
         _ = self.sample_loop(normal)
     @torch.no_grad()
     def sample_loop(self, x):
@@ -569,7 +619,7 @@ if __name__ == '__main__':
     parser.add_argument('--resampling_steps',  type=int, default=10)
     parser.add_argument('--jumping_steps',  type=int, default=5)
     parser.add_argument('--seg_gpu',  type=int, default=1)
-    parser.add_argument('--use_slerp_noise', action='store_true', help='use SLERP-mixed initial noise')
+    parser.add_argument('--use_slerp_noise', type=int, default=1, help='use SLERP-mixed initial noise')
     parser.add_argument(
         "--crops_coords_top_left_h",
         type=int,

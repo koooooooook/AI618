@@ -311,8 +311,8 @@ class Tweediemix(nn.Module):
         Spherical linear interpolation across multiple noise tensors.
         
         Args:
-            noises: list of [B, ...] torch.Tensors, each representing a noise tensor
-            weights: optional list of floats (same length as noises), should sum to 1
+            noise (torch.Tensor): noise tensor of shape [B, ...]
+            num_noises (int): number of noise tensors to interpolate
 
         Returns:
             torch.Tensor: interpolated noise tensor of shape [B, ...]
@@ -323,16 +323,12 @@ class Tweediemix(nn.Module):
             eps = torch.randn_like(noise) * self.scheduler.init_noise_sigma
             noises.append(eps)
 
-        weights = torch.tensor(weights, device=noises[0].device)
-        weights = weights / weights.sum()
-
         # Flatten all noises for interpolation
         flat_noises = [n.view(n.shape[0], -1) for n in noises]
         interpolated = flat_noises[0]  # start from the first
-
         for i in range(1, len(flat_noises)):
             n_i = flat_noises[i]
-            alpha = weights[i] / (weights[:i + 1]).sum()  # normalize step-wise
+            alpha = 1.0 / (i + 1)  # ← 고정된, 단순 역수
 
             dot = (interpolated * n_i).sum(dim=1, keepdim=True)
             dot = dot / (interpolated.norm(dim=1, keepdim=True) * n_i.norm(dim=1, keepdim=True)).clamp(min=1e-8)

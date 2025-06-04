@@ -33,6 +33,31 @@ We provide both of *Custom Diffusion* (key,query weight finetuning) and *Low-Ran
 
 We also provide several pre-trained weights in [LINK](https://drive.google.com/drive/folders/1PvNAxDtV4bCIekkI2uMTUE5J6gceDxaU?usp=drive_link)
 
+### Prompt Tuning for Composite Concepts
+To use a single token for a combination of concepts you can fine tune a soft prompt.
+Prepare a small folder of images describing the composite concept (e.g. a cat and a dog on a mountain). Place the images under `./data/dogcat_mountain`.
+
+Run the prompt tuning script
+
+```bash
+accelerate launch concept_training/prompt_tuning.py \
+  --pretrained_model_name_or_path stabilityai/stable-diffusion-xl-base-1.0 \
+  --instance_data_dir ./data/dogcat_mountain \
+  --output_dir ./checkpoint_custom/dogcat_mountain_prompt \
+  --instance_prompt "photo of <dogcat_mountain>" \
+  --modifier_token "<dogcat_mountain>" \
+  --initializer_token "dog+cat+mountain"
+```
+
+`delta-*.bin` will contain the learned embeddings. When sampling with `fusion_sampling.py` set
+
+```bash
+PROMPT_ORIG="<dogcat_mountain>"
+MODIFIER="<dogcat_mountain>"
+```
+
+which replaces the naive prompt `photo of a dog and a cat on a mountain` with the tuned token.
+
 ## Multi Concept Generation
 Sampling multi-concept aware images with personalized checkpoints
 

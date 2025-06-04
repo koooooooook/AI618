@@ -16,7 +16,13 @@ from torchvision import transforms
 #     image = (image / 127.5 - 1.0).astype(np.float32)
 #     return image
 def preprocess(image, scale, resample):
-    image.thumbnail((scale,scale))
+    """Resize ``image`` while preserving aspect ratio and normalize values."""
+    # ``thumbnail`` operates in place and ignores the provided ``resample``
+    # argument if not explicitly passed. This caused the function to always use
+    # nearest neighbour interpolation. Pass ``resample`` explicitly and work on
+    # a copy of the image to avoid side effects.
+    image = image.copy()
+    image.thumbnail((scale, scale), resample=resample)
     image = np.array(image).astype(np.uint8)
     image = (image / 127.5 - 1.0).astype(np.float32)
     return image

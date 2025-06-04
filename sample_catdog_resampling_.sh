@@ -1,11 +1,11 @@
 export PYTHONWARNINGS="ignore"
 
 export MODEL_NAME="stabilityai/stable-diffusion-xl-base-1.0"
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=2
 
 ## GPU for text-guided segmentation 
 ## we recommend to use different GPU from generation to avoid memory issue
-SEG_GPU=1
+SEG_GPU=3
 
 ## background must comes last
 ## prompt for concept 1 + prompt for concept 2 + prompt for concept 3(background)
@@ -13,7 +13,7 @@ PROMPT="photo of a cat running, mountain background+photo of a dog running, moun
 ## prompt for multiple concepts 
 PROMPT_ORIG="photo of a cat and a dog running, mountain background"
 
-NUM_NOISES=4
+NUM_NOISES=5
 
 for SEED in {3800..3829}
 do

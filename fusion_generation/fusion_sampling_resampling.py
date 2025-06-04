@@ -306,19 +306,7 @@ class Tweediemix(nn.Module):
         at = self.scheduler.alphas_cumprod[t] if t >= 0 else self.final_alpha_cumprod
         return at
 
-    def slerp_noise(self, eps1, eps2, alpha=0.5):
-        """Batch-wise spherical linear interpolation between eps1 and eps2"""
-        eps1_flat = eps1.view(eps1.shape[0], -1)
-        eps2_flat = eps2.view(eps2.shape[0], -1)
-        dot = (eps1_flat * eps2_flat).sum(dim=1, keepdim=True)
-        dot = dot / (eps1_flat.norm(dim=1, keepdim=True) * eps2_flat.norm(dim=1, keepdim=True))
-        dot = dot.clamp(-1.0, 1.0)
-        theta = torch.acos(dot)
-        sin_theta = torch.sin(theta)
-        eps = (torch.sin((1 - alpha) * theta) * eps1_flat + torch.sin(alpha * theta) * eps2_flat) / sin_theta
-        return eps.view_as(eps1)
-
-    def slerp_multiple_noises(self, noises, weights=None):
+    def slerp_multiple_noises_(self, noise, num_noises):
         """
         Spherical linear interpolation across multiple noise tensors.
         
@@ -329,15 +317,14 @@ class Tweediemix(nn.Module):
         Returns:
             torch.Tensor: interpolated noise tensor of shape [B, ...]
         """
-        assert len(noises) >= 2, "At least two noise tensors are required"
-        assert all(n.shape == noises[0].shape for n in noises), "All noise tensors must have the same shape"
+        noises = [noise]
+        
+        for i in range(num_noises):
+            eps = torch.randn_like(noise) * self.scheduler.init_noise_sigma
+            noises.append(eps)
 
-        if weights is None:
-            weights = [1.0 / len(noises)] * len(noises)
-            weights = torch.tensor(weights, device=noises[0].device)
-        else:
-            weights = torch.tensor(weights, device=noises[0].device)
-            weights = weights / weights.sum()
+        weights = torch.tensor(weights, device=noises[0].device)
+        weights = weights / weights.sum()
 
         # Flatten all noises for interpolation
         flat_noises = [n.view(n.shape[0], -1) for n in noises]
@@ -540,20 +527,11 @@ class Tweediemix(nn.Module):
     def run_fusion(self):
         t_cond = int(self.config.n_timesteps * self.config.t_cond)
         self.init_fusion(t_cond=t_cond)
-        if self.config.use_slerp_noise == 1:
-            normal = torch.randn(1,4,self.config.resolution_h//8,self.config.resolution_w//8).to(self.unet.device)  * self.scheduler.init_noise_sigma
-        elif self.config.use_slerp_noise == 2:
-            eps1 = torch.randn(1, 4, self.config.resolution_h//8, self.config.resolution_w//8).to(self.unet.device)  * self.scheduler.init_noise_sigma
-            eps2 = torch.randn_like(eps1)
-            noises = [eps1, eps2]
-            normal = self.slerp_multiple_noises(noises)
-        elif self.config.use_slerp_noise == 3:
-            eps1 = torch.randn(1, 4, self.config.resolution_h//8, self.config.resolution_w//8).to(self.unet.device)  * self.scheduler.init_noise_sigma
-            eps2 = torch.randn_like(eps1)
-            eps3 = torch.randn_like(eps1)
-            noises = [eps1, eps2, eps3]
-            normal = self.slerp_multiple_noises(noises)
+        normal = torch.randn(1,4,self.config.resolution_h//8,self.config.resolution_w//8).to(self.unet.device)  * self.scheduler.init_noise_sigma
+        if self.config.use_slerp_noise >= 2:
+            normal = self.slerp_multiple_noises_(normal, self.config.use_slerp_noise)
         _ = self.sample_loop(normal)
+        
     @torch.no_grad()
     def sample_loop(self, x):
         with torch.autocast(device_type='cuda', dtype=torch.float16):

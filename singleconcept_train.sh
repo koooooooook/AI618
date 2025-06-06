@@ -6,7 +6,7 @@ accelerate launch --num_processes 1 concept_training/diffusers_training_xl_new.p
           --pretrained_model_name_or_path=$MODEL_NAME  \
           --instance_data_dir=./benchmark_dataset/pet_dog1 \
           --output_dir=./checkpoint_custom/pet_dog1 \
-          --instance_prompt="photo of a <dog1> dog"  \
+          --instance_prompt="photo of a <dog1>"  \
           --resolution=512 \
           --train_batch_size=1  \
           --learning_rate=1e-5  \

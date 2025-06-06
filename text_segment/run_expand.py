@@ -4,11 +4,29 @@ import argparse
 import torch
 import os 
 import numpy as np
+
+def _gaussian_kernel2d(sigma: float, device):
+    k = int(6 * sigma + 1) | 1              # 홀수 kernel size
+    ax = torch.arange(k, device=device) - k // 2
+    xx, yy = torch.meshgrid(ax, ax, indexing='ij')
+    kernel = torch.exp(-(xx**2 + yy**2) / (2 * sigma ** 2))
+    kernel = kernel / kernel.sum()
+    return kernel.view(1, 1, k, k)
+
+def gaussian_blur(mask: torch.Tensor, sigma: float):
+    if sigma <= 0:
+        return mask
+    kernel = _gaussian_kernel2d(sigma, mask.device).to(mask.dtype)
+    pad = kernel.shape[-1] // 2
+    mask = F.pad(mask, [pad] * 4, mode='reflect')
+    return F.conv2d(mask, kernel)
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--input_path', type=str)
     parser.add_argument('--text_condition', type=str)
     parser.add_argument('--output_path', type=str)
+    parser.add_argument('--mask_type', type=str, default='rectangular', choices=['rectangular', 'detail'],)
     # parser.add_argument('--mode', type=str)
     # parser.add_argument('--bg_negative', type=str, default='artifacts, blurry, smooth texture, bad quality, distortions, unrealistic, distorted image')  # 'artifacts, blurry, smooth texture, bad quality, distortions, unrealistic, distorted image'
     # parser.add_argument('--fg_prompts', type=str)
@@ -42,14 +60,18 @@ if __name__ == '__main__':
         mask_orig.append(masks[0])
         nonzero_indices = torch.nonzero(masks[0])
         # print(masks[0].shape)
-        min_x = torch.min(nonzero_indices[:, 1])
-        max_x = torch.max(nonzero_indices[:, 1])
-        min_y = torch.min(nonzero_indices[:, 0])
-        max_y = torch.max(nonzero_indices[:, 0])
-        
-        rectangular_mask = torch.zeros_like(masks[0])
-        rectangular_mask[min_y:max_y+1, min_x:max_x+1] = 1
-        mask_list.append(rectangular_mask)
+        if opt.mask_type == 'detail':
+            mask_list.append(masks[0])
+        elif opt.mask_type == 'rectangular':
+            min_x = torch.min(nonzero_indices[:, 1])
+            max_x = torch.max(nonzero_indices[:, 1])
+            min_y = torch.min(nonzero_indices[:, 0])
+            max_y = torch.max(nonzero_indices[:, 0])
+            
+            rectangular_mask = torch.zeros_like(masks[0])
+            rectangular_mask[min_y:max_y+1, min_x:max_x+1] = 1
+            
+            mask_list.append(rectangular_mask)
         mask_names.append(mask_name)
 
         mask_np = nonzero_indices.cpu().numpy()
@@ -61,7 +83,7 @@ if __name__ == '__main__':
     
     overlap_region = mask_list[0] & mask_list[1]
     if torch.any(overlap_region !=0):
-        
+        r
         nonzero_indices_overlap = torch.nonzero(overlap_region)
 
         min_x = torch.min(nonzero_indices_overlap[:, 1])

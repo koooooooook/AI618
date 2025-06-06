@@ -13,6 +13,8 @@ from utils_custom import *
 from sentence_transformers.util import (semantic_search, 
                                         dot_score, 
                                         normalize_embeddings)
+import math
+import torch.nn.functional as F
 
 def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale=0.0):
     """
@@ -77,15 +79,38 @@ def compute_time_ids():
     # add_time_ids = add_time_ids.to(accelerator.device, dtype=weight_dtype)
     return add_time_ids
 
+def _gaussian_kernel2d(sigma: float, device):
+    k = int(6 * sigma + 1) | 1              # 홀수 kernel size
+    ax = torch.arange(k, device=device) - k // 2
+    xx, yy = torch.meshgrid(ax, ax, indexing='ij')
+    kernel = torch.exp(-(xx**2 + yy**2) / (2 * sigma ** 2))
+    kernel = kernel / kernel.sum()
+    return kernel.view(1, 1, k, k)
 
-def preprocess_mask(mask_path, h, w, device):
-    mask = np.array(Image.open(mask_path).convert("L"))
-    mask = mask.astype(np.float32) / 255.0
-    mask = mask[None, None]
-    mask[mask < 0.5] = 0
-    mask[mask >= 0.5] = 1
-    mask = torch.from_numpy(mask).to(device)
-    mask = torch.nn.functional.interpolate(mask, size=(h, w), mode='nearest')
+def gaussian_blur(mask: torch.Tensor, sigma: float):
+    if sigma <= 0:
+        return mask
+    kernel = _gaussian_kernel2d(sigma, mask.device).to(mask.dtype)
+    pad = kernel.shape[-1] // 2
+    mask = F.pad(mask, [pad] * 4, mode='reflect')
+    return F.conv2d(mask, kernel)
+
+def preprocess_mask(mask_path, h, w, device, mask_blur_sigma):
+    # ── ① PIL → NumPy → Torch (한 번만 차원 추가)
+    mask = np.array(Image.open(mask_path).convert("L"), dtype=np.float32) / 255.0
+    mask = torch.from_numpy(mask).unsqueeze(0).unsqueeze(0).to(device)   # (1,1,H,W)
+
+    if mask_blur_sigma > 0:
+        # ── ② hard threshold → resize → Gaussian blur
+        mask = (mask > 0.5).float()
+        mask = F.interpolate(mask, size=(h, w), mode="nearest")
+        mask = gaussian_blur(mask, mask_blur_sigma)
+        mask = mask.clamp_(0, 1)
+    else:
+        # ── ③ hard threshold만 적용하고 resize
+        mask = (mask > 0.5).float()
+        mask = F.interpolate(mask, size=(h, w), mode="nearest")
+
     return mask
 
 def preprocess_mask_raw(mask_path, h, w, device):
@@ -493,7 +518,7 @@ class Tweediemix(nn.Module):
                 decoded_tweedie = self.decode_latent(denoised_tweedie)
             path_tweedie = os.path.join( self.config.output_path ,'tweedie.jpg')
             T.ToPILImage()(decoded_tweedie[0]).save(path_tweedie)
-            test_cmd = f'CUDA_VISIBLE_DEVICES={self.config.seg_gpu} python text_segment/run_expand.py --input_path={path_tweedie} --text_condition="{self.config.seg_concepts}" --output_path={self.config.output_path}'
+            test_cmd = f'CUDA_VISIBLE_DEVICES={self.config.seg_gpu} python text_segment/run_expand.py --input_path={path_tweedie} --text_condition="{self.config.seg_concepts}" --output_path={self.config.output_path} --mask_type={self.config.mask_type}'
             os.system(test_cmd)
 
             mask_paths = []
@@ -501,9 +526,12 @@ class Tweediemix(nn.Module):
             for sp in concept_list:
                 mask_paths.append(os.path.join(self.config.output_path,sp+'.jpg'))
             
-            fg_masks = torch.cat([preprocess_mask(mask_path, self.config.resolution_h // 8, self.config.resolution_w // 8, self.unet.device) for mask_path in mask_paths])
+            fg_masks = torch.cat([preprocess_mask(mask_path, self.config.resolution_h // 8, self.config.resolution_w // 8, self.unet.device, self.config.mask_blur_sigma) for mask_path in mask_paths])
+            # bg_mask = 1 - torch.sum(fg_masks, dim=0, keepdim=True)
+            # bg_mask[bg_mask < 0] = 0
+            sum_fg = torch.sum(fg_masks, dim=0, keepdim=True).clamp(min=1e-4)
+            fg_masks = fg_masks / sum_fg            # ∑ M_c ≈ 1
             bg_mask = 1 - torch.sum(fg_masks, dim=0, keepdim=True)
-            bg_mask[bg_mask < 0] = 0
             self.masks = torch.cat([fg_masks,bg_mask])
         
         if t ==1:
@@ -594,6 +622,8 @@ if __name__ == '__main__':
     parser.add_argument('--jumping_steps',  type=int, default=5)
     parser.add_argument('--seg_gpu',  type=int, default=1)
     parser.add_argument('--use_slerp_noise', type=int, default=1, help='use SLERP-mixed initial noise')
+    parser.add_argument('--mask_blur_sigma', type=float, default=4.0, help="Gaussian σ for mask soft-blurring (0 = no blur)")
+    parser.add_argument('--mask_type', type=str, default='rectangular', choices=['rectangular', 'detail'],)
     parser.add_argument(
         "--crops_coords_top_left_h",
         type=int,

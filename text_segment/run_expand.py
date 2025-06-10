@@ -83,7 +83,6 @@ if __name__ == '__main__':
     
     overlap_region = mask_list[0] & mask_list[1]
     if torch.any(overlap_region !=0):
-        r
         nonzero_indices_overlap = torch.nonzero(overlap_region)
 
         min_x = torch.min(nonzero_indices_overlap[:, 1])

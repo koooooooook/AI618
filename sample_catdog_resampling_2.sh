@@ -1,11 +1,11 @@
 export PYTHONWARNINGS="ignore"
 
 export MODEL_NAME="stabilityai/stable-diffusion-xl-base-1.0"
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=2
 
 ## GPU for text-guided segmentation 
 ## we recommend to use different GPU from generation to avoid memory issue
-SEG_GPU=1
+SEG_GPU=3
 
 ## background must comes last
 ## prompt for concept 1 + prompt for concept 2 + prompt for concept 3(background)
@@ -14,11 +14,11 @@ PROMPT="photo of a cat running, mountain background+photo of a dog running, moun
 PROMPT_ORIG="photo of a cat and a dog running, mountain background"
 
 NUM_NOISES=3
-EXP_CODE="gaussian"
+EXP_CODE="gaussian_0refine05_start20"
 
 for SEED in {3800..3999}
 do
-    export RESULT_PATH="./test_out/${SEED}_resampling"
+    export RESULT_PATH="./test_out/${SEED}_resampling${NUM_NOISES}_${EXP_CODE}"
     echo "### Processing seed: $SEED, num_noises: $NUM_NOISES, output path: $RESULT_PATH"
 
     ## concept order must be the same as the prompt
@@ -40,7 +40,7 @@ do
     --guidance_scale 0.8 --n_timesteps 50 --prompt "$PROMPT" --personal_checkpoint $PERSONAL_CHECKPOINT \
     --output_path $RESULT_PATH --output_path_all $RESULT_PATH --sd_version "xl" --concepts "$CONCEPTS" --modifier_token $MODIFIER --resolution_h 1024 --resolution_w 1024 \
     --prompt_orig "$PROMPT_ORIG" --seed $SEED --t_cond 0.2 --seg_concepts="$SEG_CONCEPTS" --negative_prompt '' --seg_gpu $SEG_GPU \
-    --use_slerp_noise $NUM_NOISES --mask_blur_sigma 4.0 --mask_type "rectangular" --global_refine_steps 0 \
+    --use_slerp_noise $NUM_NOISES --mask_blur_sigma 4.0 --mask_type "rectangular" --global_refine_steps 10 --global_refine_guidance 0 --global_refine_sigma 0.5 --global_refine_frac 0.4 \
     --filename_postfix "${NUM_NOISES}_${EXP_CODE}"
 
 

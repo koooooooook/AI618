@@ -6,3 +6,4 @@ __pycache__/
 checkpoint_custom/
 benchmark_dataset/
 test_out/
+test_out_imgs/

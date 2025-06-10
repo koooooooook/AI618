@@ -13,12 +13,12 @@ PROMPT="photo of a cat running, mountain background+photo of a dog running, moun
 ## prompt for multiple concepts 
 PROMPT_ORIG="photo of a cat and a dog running, mountain background"
 
-NUM_NOISES=3
-EXP_CODE="gaussian"
+NUM_NOISES=1
+EXP_CODE="base"
 
 for SEED in {3800..3999}
 do
-    export RESULT_PATH="./test_out/${SEED}_resampling"
+    export RESULT_PATH="./test_out/${SEED}_resampling${NUM_NOISES}_${EXP_CODE}"
     echo "### Processing seed: $SEED, num_noises: $NUM_NOISES, output path: $RESULT_PATH"
 
     ## concept order must be the same as the prompt
@@ -40,8 +40,9 @@ do
     --guidance_scale 0.8 --n_timesteps 50 --prompt "$PROMPT" --personal_checkpoint $PERSONAL_CHECKPOINT \
     --output_path $RESULT_PATH --output_path_all $RESULT_PATH --sd_version "xl" --concepts "$CONCEPTS" --modifier_token $MODIFIER --resolution_h 1024 --resolution_w 1024 \
     --prompt_orig "$PROMPT_ORIG" --seed $SEED --t_cond 0.2 --seg_concepts="$SEG_CONCEPTS" --negative_prompt '' --seg_gpu $SEG_GPU \
-    --use_slerp_noise $NUM_NOISES --mask_blur_sigma 4.0 --mask_type "rectangular" --global_refine_steps 0 \
+    --use_slerp_noise $NUM_NOISES --mask_type "rectangular" \
     --filename_postfix "${NUM_NOISES}_${EXP_CODE}"
+
 
 
     ## -----------when using lora weights-----------

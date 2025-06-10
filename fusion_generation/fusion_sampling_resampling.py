@@ -433,7 +433,7 @@ class Tweediemix(nn.Module):
 
             unet_added_conditions_single = {"time_ids": self.add_time_ids.repeat(text_embed[:2].shape[0], 1)}
             unet_added_conditions_single.update({"text_embeds": text_embed_pool[:2]})
-
+            
             noise_pred = self.unet(latent_model_input, t, encoder_hidden_states=text_embed,added_cond_kwargs=unet_added_conditions)['sample']
 
         noise_pred_uncond = noise_pred[:1]
@@ -446,12 +446,11 @@ class Tweediemix(nn.Module):
                 noise_pred_concept = noise_pred_uncond + self.config.guidance_scale * (noise_pred_cond - noise_pred_uncond)
                 
                 denoised_tweedie += self.masks[cc].unsqueeze(0)*((x - (1-at).sqrt() * noise_pred_concept) / at.sqrt())
-                
         else:
             if t==self.start_t:
                 if self.config.resampling_steps>0:
+                    print(f'resampling {self.config.resampling_steps} steps')
                     for _ in range(self.config.resampling_steps):
-                        print('resampling')
                         noise_pred_uncond = noise_pred[:1]
                         noise_pred_mult = noise_pred[1:2]
                         noise_pred_mult = noise_pred_uncond + self.config.guidance_scale * (noise_pred_mult - noise_pred_uncond)
@@ -491,8 +490,8 @@ class Tweediemix(nn.Module):
             denoised_tweedie = (x - (1-at).sqrt() * noise_pred) / at.sqrt()
         
         denoised_latent = at_next.sqrt() * denoised_tweedie + (1-at_next).sqrt() * noise_pred_uncond
+        
         if t ==self.t_cond_prev:
-            
             denoised_latent_temp = denoised_latent
             t_temp = next_t
             if self.config.jumping_steps>0:
@@ -516,7 +515,7 @@ class Tweediemix(nn.Module):
                 decoded_tweedie = self.decode_latent(denoised_tweedie)
             else:
                 decoded_tweedie = self.decode_latent(denoised_tweedie)
-            path_tweedie = os.path.join( self.config.output_path ,'tweedie.jpg')
+            path_tweedie = os.path.join( self.config.output_path ,f'tweedie.jpg')
             T.ToPILImage()(decoded_tweedie[0]).save(path_tweedie)
             test_cmd = f'CUDA_VISIBLE_DEVICES={self.config.seg_gpu} python text_segment/run_expand.py --input_path={path_tweedie} --text_condition="{self.config.seg_concepts}" --output_path={self.config.output_path} --mask_type={self.config.mask_type}'
             os.system(test_cmd)
@@ -538,6 +537,56 @@ class Tweediemix(nn.Module):
             denoised_latent = denoised_tweedie
         
         return denoised_latent
+
+    @torch.no_grad()
+    def global_refine(self, x0: torch.Tensor):
+        """
+        샘플링이 끝난 latent x0를 self.unet으로 4–8 DDIM 스텝만 살짝 리터치.
+        * encoder_hidden_states 2행(uncond+multi)로 전달 → 컨셉별 to_k_i 사용 안 함
+        """
+        
+        # ① DDIM timesteps: 마지막 s+1개만 사용 (σ가 매우 작은 구간)
+        ddim = DDIMScheduler.from_config(self.scheduler.config)
+        start_t = int(50 * self.config.global_refine_frac)
+        start_t = max(start_t, self.config.global_refine_steps + 2)                           # 최소 보장
+        ddim.set_timesteps(start_t + 1, device=self.device)     # 0…start_t
+        ts = ddim.timesteps[-(self.config.global_refine_steps + 1):]                          # start_t 근처 σ 구간
+        ddim.timesteps = ts.flip(0)[:-1]                        # s개만 남김
+
+        # ② x0 → x_t0 (아주 작은 노이즈 추가)
+        t0 = ts[-1]
+        alpha0 = ddim.alphas_cumprod[t0]
+        noise = torch.randn_like(x0) * self.config.global_refine_sigma
+        x = alpha0.sqrt() * x0 + (1 - alpha0).sqrt() * noise
+
+        # ③ 두 줄짜리 임베딩(uncond + multi)만 준비
+        text_embed_cond, text_embed_pool_cond = self.text_embeds
+        text_embed        = text_embed_cond[:2]         # [uncond, multi]
+        text_embed_pool   = text_embed_pool_cond[:2]    # 동일 길이
+
+        # ④ DDIM 루프
+        print(f'Global refine: {self.config.global_refine_steps} steps')
+        for t in ddim.timesteps:
+            latent_model_input = torch.cat([x, x])      # (2, C, H, W)
+
+            added_cond = {
+                "time_ids": self.add_time_ids.repeat(2, 1),
+                "text_embeds": text_embed_pool,
+            }
+
+            # self.unet은 이미 fp16·eval 상태
+            eps = self.unet(latent_model_input, t,
+                            encoder_hidden_states=text_embed,
+                            added_cond_kwargs=added_cond).sample
+            eps_uncond = eps[0:1]
+            eps_cond   = eps[1:2]
+
+            g  = self.config.global_refine_guidance
+            eps_final = eps_uncond + g * (eps_cond - eps_uncond)
+
+            x = ddim.step(eps_final, t, x, eta=0).prev_sample
+
+        return x
 
     def init_fusion(self, t_cond):
         self.t_cond = self.scheduler.timesteps[t_cond:] if t_cond >= 0 else []
@@ -561,6 +610,9 @@ class Tweediemix(nn.Module):
         with torch.autocast(device_type='cuda', dtype=torch.float16):
             for i, t in enumerate(tqdm(self.scheduler.timesteps, desc="Sampling")):
                 x = self.denoise_step(x, t)
+            
+            if self.config.global_refine_steps is not None and self.config.global_refine_steps != 0:
+                x = self.global_refine(x)
             
             needs_upcasting = self.vae.dtype == torch.float16 and self.vae.config.force_upcast
 
@@ -595,6 +647,8 @@ class Tweediemix(nn.Module):
             os.makedirs(self.config.output_path_all, exist_ok=True)
             image = self.image_processor.postprocess(decoded_latent, output_type='pil')
             image[0].save(f'{self.config.output_path_all}/{self.config.prompt_orig}_{self.config.seed}.png')
+            image[0].save(f'./test_out_imgs/{self.config.seed}_{self.config.filename_postfix}.png')
+            print("################################################################################")
                 
         return decoded_latent
 
@@ -621,9 +675,20 @@ if __name__ == '__main__':
     parser.add_argument('--resampling_steps',  type=int, default=10)
     parser.add_argument('--jumping_steps',  type=int, default=5)
     parser.add_argument('--seg_gpu',  type=int, default=1)
-    parser.add_argument('--use_slerp_noise', type=int, default=1, help='use SLERP-mixed initial noise')
-    parser.add_argument('--mask_blur_sigma', type=float, default=4.0, help="Gaussian σ for mask soft-blurring (0 = no blur)")
+    parser.add_argument('--use_slerp_noise', type=int, default=1,
+                        help='use SLERP-mixed initial noise')
+    parser.add_argument('--mask_blur_sigma', type=float, default=0,
+                        help="Gaussian σ for mask soft-blurring (0 = no blur)")
     parser.add_argument('--mask_type', type=str, default='rectangular', choices=['rectangular', 'detail'],)
+    parser.add_argument('--global_refine_steps',   type=int,
+                        help='샘플링 종료 뒤 추가 DDIM 스텝 수')
+    parser.add_argument('--global_refine_guidance',type=float,
+                        help='추가 리터치 단계 CFG 스케일')
+    parser.add_argument('--global_refine_sigma',   type=float,
+                        help='리터치 시작 시 삽입할 노이즈 표준편차')
+    parser.add_argument('--global_refine_frac', type=float,
+                        help='리터치 시작 시점: 0.0~1.0 사이의 비율로, 0.5면 전체 DDIM 스텝의 절반에서 시작')
+    parser.add_argument('--filename_postfix', type=str)
     parser.add_argument(
         "--crops_coords_top_left_h",
         type=int,

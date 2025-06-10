@@ -15,6 +15,7 @@ from sentence_transformers.util import (semantic_search,
                                         normalize_embeddings)
 import math
 import torch.nn.functional as F
+from torchvision.utils import save_image
 
 def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale=0.0):
     """
@@ -99,18 +100,10 @@ def preprocess_mask(mask_path, h, w, device, mask_blur_sigma):
     # ── ① PIL → NumPy → Torch (한 번만 차원 추가)
     mask = np.array(Image.open(mask_path).convert("L"), dtype=np.float32) / 255.0
     mask = torch.from_numpy(mask).unsqueeze(0).unsqueeze(0).to(device)   # (1,1,H,W)
-
-    if mask_blur_sigma > 0:
-        # ── ② hard threshold → resize → Gaussian blur
-        mask = (mask > 0.5).float()
-        mask = F.interpolate(mask, size=(h, w), mode="nearest")
-        mask = gaussian_blur(mask, mask_blur_sigma)
-        mask = mask.clamp_(0, 1)
-    else:
-        # ── ③ hard threshold만 적용하고 resize
-        mask = (mask > 0.5).float()
-        mask = F.interpolate(mask, size=(h, w), mode="nearest")
-
+    mask = (mask > 0.5).float()
+    mask = F.interpolate(mask, size=(h, w), mode="nearest")
+    hard_path = os.path.splitext(mask_path)[0] + "_hard.png"
+    save_image(mask.cpu(), hard_path)
     return mask
 
 def preprocess_mask_raw(mask_path, h, w, device):
@@ -525,13 +518,37 @@ class Tweediemix(nn.Module):
             for sp in concept_list:
                 mask_paths.append(os.path.join(self.config.output_path,sp+'.jpg'))
             
+            # MASKS
             fg_masks = torch.cat([preprocess_mask(mask_path, self.config.resolution_h // 8, self.config.resolution_w // 8, self.unet.device, self.config.mask_blur_sigma) for mask_path in mask_paths])
-            # bg_mask = 1 - torch.sum(fg_masks, dim=0, keepdim=True)
-            # bg_mask[bg_mask < 0] = 0
-            sum_fg = torch.sum(fg_masks, dim=0, keepdim=True).clamp(min=1e-4)
-            fg_masks = fg_masks / sum_fg            # ∑ M_c ≈ 1
             bg_mask = 1 - torch.sum(fg_masks, dim=0, keepdim=True)
-            self.masks = torch.cat([fg_masks,bg_mask])
+            bg_mask[bg_mask < 0] = 0
+            
+            # MASK NORMALIZATION
+            if self.config.mask_blur_sigma > 0:
+                fg_masks_soft = gaussian_blur(fg_masks, self.config.mask_blur_sigma).clamp_(0, 1)
+                bg_mask_soft = gaussian_blur(bg_mask, self.config.mask_blur_sigma).clamp_(0, 1)
+                
+                for i in range(len(mask_paths)):
+                    mask_path = mask_paths[i]
+                    soft_path = os.path.splitext(mask_path)[0] + "_soft.png"
+                    save_image(fg_masks_soft[i].cpu(), soft_path)
+                soft_path = os.path.join(self.config.output_path , "background_soft.png")
+                save_image(bg_mask_soft.cpu(), soft_path)
+                
+                masks_all = torch.cat([fg_masks_soft, bg_mask_soft], dim=0)
+                sum_all = masks_all.sum(dim=0, keepdim=True).clamp(min=1e-4)
+                masks_norm = masks_all / sum_all
+                fg_masks_soft = masks_norm[:-1]
+                bg_mask_soft  = masks_norm[-1:]
+                
+                for i in range(len(mask_paths)):
+                    mask_path = mask_paths[i]
+                    soft_path = os.path.splitext(mask_path)[0] + "_soft_normalized.png"
+                    save_image(fg_masks_soft[i].cpu(), soft_path)
+                soft_path = os.path.join(self.config.output_path , "background_soft_normalized.png")
+                save_image(bg_mask_soft.cpu(), soft_path)
+            
+            self.masks = torch.cat([fg_masks_soft,bg_mask_soft])
         
         if t ==1:
             denoised_latent = denoised_tweedie
@@ -545,7 +562,7 @@ class Tweediemix(nn.Module):
         * encoder_hidden_states 2행(uncond+multi)로 전달 → 컨셉별 to_k_i 사용 안 함
         """
         
-        # ① DDIM timesteps: 마지막 s+1개만 사용 (σ가 매우 작은 구간)
+        # DDIM timesteps: 마지막 s+1개만 사용 (σ가 매우 작은 구간)
         ddim = DDIMScheduler.from_config(self.scheduler.config)
         start_t = int(50 * self.config.global_refine_frac)
         start_t = max(start_t, self.config.global_refine_steps + 2)                           # 최소 보장
@@ -553,18 +570,18 @@ class Tweediemix(nn.Module):
         ts = ddim.timesteps[-(self.config.global_refine_steps + 1):]                          # start_t 근처 σ 구간
         ddim.timesteps = ts.flip(0)[:-1]                        # s개만 남김
 
-        # ② x0 → x_t0 (아주 작은 노이즈 추가)
+        # x0 → x_t0 (아주 작은 노이즈 추가)
         t0 = ts[-1]
         alpha0 = ddim.alphas_cumprod[t0]
         noise = torch.randn_like(x0) * self.config.global_refine_sigma
         x = alpha0.sqrt() * x0 + (1 - alpha0).sqrt() * noise
 
-        # ③ 두 줄짜리 임베딩(uncond + multi)만 준비
+        # 두 줄짜리 임베딩(uncond + multi)만 준비
         text_embed_cond, text_embed_pool_cond = self.text_embeds
         text_embed        = text_embed_cond[:2]         # [uncond, multi]
         text_embed_pool   = text_embed_pool_cond[:2]    # 동일 길이
 
-        # ④ DDIM 루프
+        # DDIM 루프
         print(f'Global refine: {self.config.global_refine_steps} steps')
         for t in ddim.timesteps:
             latent_model_input = torch.cat([x, x])      # (2, C, H, W)
@@ -574,7 +591,6 @@ class Tweediemix(nn.Module):
                 "text_embeds": text_embed_pool,
             }
 
-            # self.unet은 이미 fp16·eval 상태
             eps = self.unet(latent_model_input, t,
                             encoder_hidden_states=text_embed,
                             added_cond_kwargs=added_cond).sample
@@ -648,7 +664,7 @@ class Tweediemix(nn.Module):
             image = self.image_processor.postprocess(decoded_latent, output_type='pil')
             image[0].save(f'{self.config.output_path_all}/{self.config.prompt_orig}_{self.config.seed}.png')
             image[0].save(f'./test_out_imgs/{self.config.seed}_{self.config.filename_postfix}.png')
-            print("################################################################################")
+            print("################################################################################\n")
                 
         return decoded_latent
 

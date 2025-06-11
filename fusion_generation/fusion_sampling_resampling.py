@@ -536,7 +536,7 @@ class Tweediemix(nn.Module):
             hard_path = os.path.join(self.config.output_path , "background_hard.png")
             save_image(bg_mask.cpu(), hard_path)
             if self.config.normalize_masks:
-                bg_mask = gaussian_blur(bg_mask, self.config.bgmask_blur_sigma).clamp_(0, 1)
+                bg_mask = gaussian_blur(bg_mask, self.config.mask_blur_sigma).clamp_(0, 1)
                 soft_path = os.path.join(self.config.output_path , "background_soft.png")
                 save_image(bg_mask.cpu(), soft_path)
             

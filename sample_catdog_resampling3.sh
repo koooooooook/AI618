@@ -14,7 +14,7 @@ PROMPT=PROMPT="photo of a bunny running, waterfall background+photo of a dog run
 PROMPT_ORIG="photo of a bunny and a dog running, waterfall background"
 
 NUM_NOISES=3
-EXP_CODE="bunny_gaussian1_normalized"
+EXP_CODE="bunny_gaussian1"
 
 for SEED in {3800..3829}
 do
@@ -40,7 +40,7 @@ do
     --guidance_scale 0.8 --n_timesteps 50 --prompt "$PROMPT" --personal_checkpoint $PERSONAL_CHECKPOINT \
     --output_path $RESULT_PATH --output_path_all $RESULT_PATH --sd_version "xl" --concepts "$CONCEPTS" --modifier_token $MODIFIER --resolution_h 1024 --resolution_w 1024 \
     --prompt_orig "$PROMPT_ORIG" --seed $SEED --t_cond 0.2 --seg_concepts="$SEG_CONCEPTS" --negative_prompt '' --seg_gpu $SEG_GPU \
-    --use_slerp_noise $NUM_NOISES --mask_type "rectangular" --mask_blur_sigma 1.0 --normalize_masks \
+    --use_slerp_noise $NUM_NOISES --mask_type "rectangular" --mask_blur_sigma 1.0 \
     --filename_postfix "${NUM_NOISES}_${EXP_CODE}"
     
 

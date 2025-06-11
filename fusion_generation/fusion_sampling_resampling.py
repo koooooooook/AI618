@@ -102,8 +102,6 @@ def preprocess_mask(mask_path, h, w, device, mask_blur_sigma):
     mask = torch.from_numpy(mask).unsqueeze(0).unsqueeze(0).to(device)   # (1,1,H,W)
     mask = (mask > 0.5).float()
     mask = F.interpolate(mask, size=(h, w), mode="nearest")
-    hard_path = os.path.splitext(mask_path)[0] + "_hard.png"
-    save_image(mask.cpu(), hard_path)
     return mask
 
 def preprocess_mask_raw(mask_path, h, w, device):
@@ -520,35 +518,44 @@ class Tweediemix(nn.Module):
             
             # MASKS
             fg_masks = torch.cat([preprocess_mask(mask_path, self.config.resolution_h // 8, self.config.resolution_w // 8, self.unet.device, self.config.mask_blur_sigma) for mask_path in mask_paths])
-            bg_mask = 1 - torch.sum(fg_masks, dim=0, keepdim=True)
-            bg_mask[bg_mask < 0] = 0
+            for i in range(len(mask_paths)):
+                mask_path = mask_paths[i]
+                hard_path = os.path.splitext(mask_path)[0] + "_hard.png"
+                save_image(fg_masks[i].cpu(), hard_path)
             
             # MASK NORMALIZATION
             if self.config.mask_blur_sigma > 0:
-                fg_masks_soft = gaussian_blur(fg_masks, self.config.mask_blur_sigma).clamp_(0, 1)
-                bg_mask_soft = gaussian_blur(bg_mask, self.config.mask_blur_sigma).clamp_(0, 1)
-                
+                fg_masks = gaussian_blur(fg_masks, self.config.mask_blur_sigma).clamp_(0, 1)                
                 for i in range(len(mask_paths)):
                     mask_path = mask_paths[i]
                     soft_path = os.path.splitext(mask_path)[0] + "_soft.png"
-                    save_image(fg_masks_soft[i].cpu(), soft_path)
-                soft_path = os.path.join(self.config.output_path , "background_soft.png")
-                save_image(bg_mask_soft.cpu(), soft_path)
+                    save_image(fg_masks[i].cpu(), soft_path)
                 
-                masks_all = torch.cat([fg_masks_soft, bg_mask_soft], dim=0)
+            # BACKGROUND MASK    
+            bg_mask = 1 - torch.sum(fg_masks, dim=0, keepdim=True).clamp_(0, 1)
+            hard_path = os.path.join(self.config.output_path , "background_hard.png")
+            save_image(bg_mask.cpu(), hard_path)
+            if self.config.normalize_masks:
+                bg_mask = gaussian_blur(bg_mask, self.config.bgmask_blur_sigma).clamp_(0, 1)
+                soft_path = os.path.join(self.config.output_path , "background_soft.png")
+                save_image(bg_mask.cpu(), soft_path)
+            
+            # NORMALIZE MASKS
+            if self.config.normalize_masks:
+                print("### Normalizing masks ###")                
+                masks_all = torch.cat([fg_masks, bg_mask], dim=0)
                 sum_all = masks_all.sum(dim=0, keepdim=True).clamp(min=1e-4)
                 masks_norm = masks_all / sum_all
-                fg_masks_soft = masks_norm[:-1]
-                bg_mask_soft  = masks_norm[-1:]
-                
+                fg_masks = masks_norm[:-1]
                 for i in range(len(mask_paths)):
                     mask_path = mask_paths[i]
-                    soft_path = os.path.splitext(mask_path)[0] + "_soft_normalized.png"
-                    save_image(fg_masks_soft[i].cpu(), soft_path)
-                soft_path = os.path.join(self.config.output_path , "background_soft_normalized.png")
-                save_image(bg_mask_soft.cpu(), soft_path)
-            
-            self.masks = torch.cat([fg_masks_soft,bg_mask_soft])
+                    soft_path = os.path.splitext(mask_path)[0] + "_normalized.png"
+                    save_image(fg_masks[i].cpu(), soft_path)
+                bg_mask  = masks_norm[-1:]
+                soft_path = os.path.join(self.config.output_path , "background_normalized.png")
+                save_image(bg_mask.cpu(), soft_path)
+                
+            self.masks = torch.cat([fg_masks, bg_mask])
         
         if t ==1:
             denoised_latent = denoised_tweedie
@@ -704,6 +711,8 @@ if __name__ == '__main__':
                         help='리터치 시작 시 삽입할 노이즈 표준편차')
     parser.add_argument('--global_refine_frac', type=float,
                         help='리터치 시작 시점: 0.0~1.0 사이의 비율로, 0.5면 전체 DDIM 스텝의 절반에서 시작')
+    parser.add_argument('--normalize_masks', action='store_true',
+                        help='마스크를 정규화합니다. (0~1 범위로 스케일링)')
     parser.add_argument('--filename_postfix', type=str)
     parser.add_argument(
         "--crops_coords_top_left_h",
